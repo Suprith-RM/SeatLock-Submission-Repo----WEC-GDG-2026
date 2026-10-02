@@ -1,18 +1,25 @@
+/**
+ * JWT authentication middleware.
+ * Verifies token from Authorization header or ?token query param (for SSE).
+ */
 import jwt from 'jsonwebtoken';
 import { AppError, ErrorCode } from '../utils/errors.js';
 
-/**
- * Authenticates request using JSON Web Token (Bearer scheme).
- */
 export function authenticate(req, res, next) {
   const authHeader = req.headers['authorization'];
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next(AppError.unauthorized('Authentication required.'));
+  const queryToken = req.query?.token;
+
+  let token;
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else if (queryToken) {
+    token = String(queryToken).trim();
   }
 
-  const token = authHeader.slice(7).trim();
   if (!token) {
-    return next(AppError.unauthorized('Authentication token is missing.'));
+    return next(AppError.unauthorized(
+      'Authentication required. Add: Authorization: Bearer <token>'
+    ));
   }
 
   try {
@@ -21,21 +28,11 @@ export function authenticate(req, res, next) {
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
-      return next(new AppError(
-        ErrorCode.TOKEN_EXPIRED,
-        'Session expired. Please log in again.',
-        401
-      ));
+      return next(new AppError(ErrorCode.TOKEN_EXPIRED, 'Session expired. Please log in again.', 401));
     }
-
     if (err.name === 'JsonWebTokenError') {
-      return next(new AppError(
-        ErrorCode.TOKEN_INVALID,
-        'Invalid authentication token.',
-        401
-      ));
+      return next(new AppError(ErrorCode.TOKEN_INVALID, 'Invalid authentication token.', 401));
     }
-
     return next(AppError.unauthorized('Authentication failed.'));
   }
 }
