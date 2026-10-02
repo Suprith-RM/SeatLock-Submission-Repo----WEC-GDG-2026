@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Build
+dist/
+build/
+.vite/
+
+# Coverage
+coverage/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# k6 results
+test-results/
+k6-results/
