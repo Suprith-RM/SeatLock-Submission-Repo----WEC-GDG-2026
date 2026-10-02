@@ -37,7 +37,6 @@ const globalLimiter = rateLimit({
   skip:            () => process.env.NODE_ENV === 'test',
   message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests.' } },
 });
-app.use('/api/', globalLimiter);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 20,
@@ -49,10 +48,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), env: process.env.NODE_ENV });
 });
 
-app.use('/api/auth',         authLimiter,  authRoutes);
-app.use('/api/workshops',                  workshopRoutes);
-app.use('/api/reservations',               reservationRoutes);
-app.use('/api/events',                     eventsRoutes);
+app.use('/api/auth',         authLimiter,   authRoutes);
+app.use('/api/workshops',    globalLimiter, workshopRoutes);
+app.use('/api/reservations', globalLimiter, reservationRoutes);
+app.use('/api/events',       globalLimiter, eventsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
