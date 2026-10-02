@@ -1,52 +1,53 @@
 /**
- * Server-Sent Events (SSE) controller for real-time workshop updates.
+ * Events Controller — SSE stream handler.
+ * Handles the long-lived SSE connection for a workshop.
+ * Broadcasts only public aggregated data.
  */
-import * as workshopService from '../services/workshopService.js';
-import * as sseManager      from '../realtime/sseManager.js';
-import { logger }           from '../utils/logger.js';
+import { subscribe as sseSubscribe, unsubscribe, sendConnectedEvent } from '../realtime/sseManager.js';
+import { AppError, ErrorCode } from '../utils/errors.js';
+import { query } from '../config/db.js';
+import { logger } from '../utils/logger.js';
 
-export async function subscribe(req, res) {
+const KEEP_ALIVE_INTERVAL_MS = 25_000;
+
+export async function streamWorkshopEvents(req, res, next) {
   const { workshopId } = req.params;
 
-  let workshop;
-  try {
-    workshop = await workshopService.getWorkshop(workshopId);
-  } catch (_) {
-    return res.status(404).json({
-      error: { code: 'WORKSHOP_NOT_FOUND', message: 'Workshop not found.' },
-    });
+  const wsCheck = await query(
+    'SELECT id FROM workshops WHERE id = $1',
+    [workshopId],
+  ).catch(() => null);
+
+  if (!wsCheck?.rows[0]) {
+    return next(AppError.notFound(ErrorCode.WORKSHOP_NOT_FOUND, 'Workshop not found.'));
   }
 
-  res.setHeader('Content-Type',     'text/event-stream');
-  res.setHeader('Cache-Control',    'no-cache');
-  res.setHeader('Connection',       'keep-alive');
+  res.setHeader('Content-Type',  'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection',    'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-
-  // Flush headers immediately to establish stream
   res.flushHeaders();
 
-  // Send initial workshop state on connection
-  res.write(`data: ${JSON.stringify({ type: 'connected', workshop })}\n\n`);
+  sseSubscribe(workshopId, res);
+  logger.debug('SSE connection opened', { workshopId, userId: req.user?.id });
 
-  sseManager.subscribe(workshopId, res);
-  logger.debug('SSE client connected', {
-    workshopId,
-    userId:      req.user?.id,
-    subscribers: sseManager.getSubscriberCount(workshopId),
-  });
+  await sendConnectedEvent(workshopId, res).catch(err =>
+    logger.warn('Failed to send connected event', { err: err?.message }),
+  );
 
-  // Keep-alive ping to prevent proxy connection timeouts
-  const pingInterval = setInterval(() => {
+  const keepAlive = setInterval(() => {
     try {
-      res.write(': ping\n\n');
+      res.write(': keep-alive\n\n');
     } catch (_) {
-      clearInterval(pingInterval);
+      clearInterval(keepAlive);
     }
-  }, 25_000);
+  }, KEEP_ALIVE_INTERVAL_MS);
 
   req.on('close', () => {
-    clearInterval(pingInterval);
-    sseManager.unsubscribe(workshopId, res);
-    logger.debug('SSE client disconnected', { workshopId });
+    clearInterval(keepAlive);
+    unsubscribe(workshopId, res);
+    logger.debug('SSE connection closed', { workshopId, userId: req.user?.id });
   });
 }
+
+export const subscribe = streamWorkshopEvents;

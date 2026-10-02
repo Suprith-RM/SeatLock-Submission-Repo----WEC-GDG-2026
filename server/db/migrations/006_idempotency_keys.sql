@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at      TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
     CONSTRAINT idempotency_keys_pkey      PRIMARY KEY (key, user_id),
-    CONSTRAINT idempotency_status_valid   CHECK (response_status BETWEEN 100 AND 599),
+    CONSTRAINT idempotency_status_valid   CHECK (response_status = 0 OR (response_status BETWEEN 100 AND 599)),
     CONSTRAINT idempotency_key_not_empty  CHECK (key != ''),
     CONSTRAINT idempotency_hash_not_empty CHECK (request_hash != '')
 );

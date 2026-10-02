@@ -1,58 +1,121 @@
 /**
- * In-memory manager for Server-Sent Events (SSE) subscriptions.
+ * SSE Manager — Server-Sent Events broadcast hub.
+ * Broadcasts only aggregated public data: { id, name, capacity, availableSeats, isFull }.
  */
+import { query } from '../config/db.js';
 import { logger } from '../utils/logger.js';
 
-// Map<workshopId (string) -> Set<Express.Response>>
-const subscribers = new Map();
+// Map<workshopId, Set<Response>>
+const connections = new Map();
 
-/** Subscribe a response to a workshop's event stream. */
 export function subscribe(workshopId, res) {
-  if (!subscribers.has(workshopId)) {
-    subscribers.set(workshopId, new Set());
+  if (!connections.has(workshopId)) {
+    connections.set(workshopId, new Set());
   }
-  subscribers.get(workshopId).add(res);
+  connections.get(workshopId).add(res);
   logger.debug('SSE client subscribed', {
     workshopId,
-    subscribers: subscribers.get(workshopId).size,
+    clients: connections.get(workshopId).size,
   });
 }
 
-/** Remove a response from a workshop's subscriber set. */
 export function unsubscribe(workshopId, res) {
-  const subs = subscribers.get(workshopId);
-  if (!subs) return;
-  subs.delete(res);
-  if (subs.size === 0) subscribers.delete(workshopId);
+  const clients = connections.get(workshopId);
+  if (!clients) return;
+  clients.delete(res);
+  if (clients.size === 0) connections.delete(workshopId);
+  logger.debug('SSE client unsubscribed', { workshopId });
 }
 
-/**
- * Broadcast a JSON-serializable event to all subscribers of a workshop.
- * Format: SSE requires "data: <json>\n\n"
- * Dead connections are cleaned up during broadcast.
- */
-export function broadcast(workshopId, data) {
-  const subs = subscribers.get(workshopId);
-  if (!subs || subs.size === 0) return;
+export function getSubscriberCount(workshopId) {
+  return connections.get(workshopId)?.size ?? 0;
+}
 
-  const message = `data: ${JSON.stringify(data)}\n\n`;
-  const dead = [];
+export async function fetchPublicWorkshopState(workshopId) {
+  const result = await query(`
+    SELECT
+      w.id,
+      w.name,
+      w.capacity,
+      COUNT(r.id) FILTER (
+        WHERE r.status IN ('HELD', 'CONFIRMED')
+          AND (r.status = 'CONFIRMED' OR r.expires_at > NOW())
+      )::INT AS active_count
+    FROM  workshops w
+    LEFT JOIN reservations r ON r.workshop_id = w.id
+    WHERE w.id = $1
+    GROUP BY w.id
+  `, [workshopId]);
 
-  for (const res of subs) {
+  if (!result.rows[0]) return null;
+
+  const ws = result.rows[0];
+  const availableSeats = Math.max(0, ws.capacity - ws.active_count);
+
+  return {
+    id:             ws.id,
+    name:           ws.name,
+    capacity:       ws.capacity,
+    availableSeats,
+    isFull:         availableSeats === 0,
+  };
+}
+
+export async function broadcastWorkshopUpdate(workshopId) {
+  const clients = connections.get(workshopId);
+  if (!clients || clients.size === 0) {
+    return;
+  }
+
+  const workshop = await fetchPublicWorkshopState(workshopId);
+  if (!workshop) {
+    logger.warn('broadcastWorkshopUpdate: workshop not found', { workshopId });
+    return;
+  }
+
+  const payload = `data: ${JSON.stringify({ type: 'workshop_update', workshop })}\n\n`;
+  const dead    = new Set();
+
+  for (const res of clients) {
     try {
-      res.write(message);
+      res.write(payload);
     } catch (_) {
-      dead.push(res); // Connection closed unexpectedly
+      dead.add(res);
+      logger.debug('SSE write failed — client disconnected', { workshopId });
     }
   }
 
-  for (const res of dead) {
-    subs.delete(res);
-  }
-  if (subs.size === 0) subscribers.delete(workshopId);
+  for (const res of dead) clients.delete(res);
+  if (clients.size === 0) connections.delete(workshopId);
 }
 
-/** Return how many clients are currently subscribed to a workshop. */
-export function getSubscriberCount(workshopId) {
-  return subscribers.get(workshopId)?.size ?? 0;
+export async function sendConnectedEvent(workshopId, res) {
+  const workshop = await fetchPublicWorkshopState(workshopId);
+  if (!workshop) return;
+
+  const payload = `data: ${JSON.stringify({ type: 'connected', workshop })}\n\n`;
+  try {
+    res.write(payload);
+  } catch (_) {
+    // Client disconnected immediately
+  }
+}
+
+export function broadcast(workshopId, data) {
+  const clients = connections.get(workshopId);
+  if (!clients || clients.size === 0) return;
+
+  const payload = `data: ${JSON.stringify(data)}\n\n`;
+  const dead = [];
+
+  for (const res of clients) {
+    try {
+      res.write(payload);
+    } catch (_) {
+      dead.push(res);
+    }
+  }
+
+  for (const res of dead) clients.delete(res);
+  if (clients.size === 0) connections.delete(workshopId);
 }
