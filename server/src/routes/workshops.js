@@ -19,8 +19,16 @@ router.post('/:workshopId/holds',
   authenticate, requireIdempotencyKey, reservationController.createHold);
 
 // Waitlist
-router.post('/:workshopId/waitlist',          authenticate, waitlistController.joinWaitlist);
-router.delete('/:workshopId/waitlist',        authenticate, waitlistController.leaveWaitlist);
-router.get('/:workshopId/waitlist/position',  authenticate, waitlistController.getWaitlistPosition);
+router.post('/:workshopId/waitlist',
+  authenticate,
+  requireIdempotencyKey,
+  waitlistController.joinWaitlist,
+);
+router.delete('/:workshopId/waitlist',
+  authenticate,
+  requireIdempotencyKey,
+  waitlistController.leaveWaitlist,
+);
+router.get('/:workshopId/waitlist/position', authenticate, waitlistController.getWaitlistPosition);
 
 export default router;

@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import * as reservationController from '../controllers/reservationController.js';
 import { authenticate }           from '../middleware/authMiddleware.js';
+import { requireIdempotencyKey }  from '../middleware/idempotency.js';
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.get('/:reservationId',
 // Confirms a HELD reservation before it expires
 router.post('/:reservationId/confirm',
   authenticate,
+  requireIdempotencyKey,
   reservationController.confirmHold
 );
 
@@ -26,6 +28,7 @@ router.post('/:reservationId/confirm',
 // Cancels a HELD or CONFIRMED reservation
 router.delete('/:reservationId',
   authenticate,
+  requireIdempotencyKey,
   reservationController.cancelReservation
 );
 

@@ -1,248 +1,277 @@
 /**
- * Waitlist service managing queue join/leave operations and automatic promotion.
+ * Waitlist service managing waitlist entry lifecycles and queue promotions.
  */
-import { getClient }         from '../config/db.js';
-import * as workshopRepo      from '../repositories/workshopRepository.js';
-import * as waitlistRepo      from '../repositories/waitlistRepository.js';
-import * as eventRepo         from '../repositories/eventRepository.js';
-import { AppError, ErrorCode } from '../utils/errors.js';
-import { logger }             from '../utils/logger.js';
+import { query, getClient }        from '../config/db.js';
+import { executeWithIdempotency }  from './idempotencyService.js';
+import { AppError, ErrorCode }     from '../utils/errors.js';
+import { logger }                  from '../utils/logger.js';
 
-const HOLD_DURATION_SECONDS = () =>
-  parseInt(process.env.HOLD_DURATION_SECONDS || '300', 10);
-
-// ── JOIN ─────────────────────────────────────────────────────────────────────
-
-export async function joinWaitlist({ userId, workshopId }) {
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
-
-    // Lock workshop row — serializes all concurrent join attempts
-    const workshop = await workshopRepo.lockForUpdate(client, workshopId);
-    if (!workshop) {
-      throw AppError.notFound(ErrorCode.WORKSHOP_NOT_FOUND, 'Workshop not found.');
-    }
-
-    // ── Guard 1: Seats must be full ──────────────────────────────────────────
-    const activeCount = await workshopRepo.countActive(client, workshopId);
-    if (activeCount < workshop.capacity) {
-      throw AppError.conflict(
-        ErrorCode.SEATS_AVAILABLE_USE_HOLD,
-        `${workshop.capacity - activeCount} seat(s) are still available. Create a hold instead of joining the waitlist.`
-      );
-    }
-
-    // ── Guard 2: User must not have an active reservation ────────────────────
-    const activeRes = await client.query(`
-      SELECT id FROM reservations
-      WHERE user_id = $1 AND workshop_id = $2 AND status IN ('HELD', 'CONFIRMED')
-    `, [userId, workshopId]);
-    if (activeRes.rows.length > 0) {
-      throw AppError.conflict(
-        ErrorCode.ALREADY_HAS_RESERVATION,
-        'You already have an active reservation. Cancel it first if you want to join the waitlist.'
-      );
-    }
-
-    // ── Guard 3: User must not already be WAITING ───────────────────────────
-    const existing = await client.query(`
-      SELECT id FROM waitlist_entries
-      WHERE user_id = $1 AND workshop_id = $2 AND status = 'WAITING'
-    `, [userId, workshopId]);
-    if (existing.rows.length > 0) {
-      throw AppError.conflict(
-        ErrorCode.ALREADY_ON_WAITLIST,
-        'You are already on the waitlist for this workshop.'
-      );
-    }
-
-    // ── Insert ───────────────────────────────────────────────────────────────
-    const entry = await waitlistRepo.join(client, userId, workshopId);
-
-    await eventRepo.insertEvent(client, {
-      userId,
-      workshopId,
-      eventType:  'WAITLIST_JOINED',
-      prevStatus: null,
-      newStatus:  'WAITING',
-      reason:     'User joined waitlist.',
-      metadata:   { position: entry.position },
-    });
-
-    await client.query('COMMIT');
-    logger.info('Waitlist joined', { userId, workshopId, position: entry.position });
-    return formatEntry(entry);
-
-  } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
-    // DB-level unique index guard (idx_one_active_waitlist_per_user)
-    if (err.code === '23505') {
-      throw AppError.conflict(ErrorCode.ALREADY_ON_WAITLIST, 'You are already on the waitlist.');
-    }
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-// ── LEAVE ────────────────────────────────────────────────────────────────────
-
-export async function leaveWaitlist({ userId, workshopId }) {
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
-
-    // Lock the entry to prevent concurrent removal
-    const entry = await client.query(`
-      SELECT id FROM waitlist_entries
-      WHERE  user_id = $1 AND workshop_id = $2 AND status = 'WAITING'
-      FOR UPDATE
-    `, [userId, workshopId]);
-
-    if (entry.rows.length === 0) {
-      await client.query('ROLLBACK');
-      throw AppError.notFound(
-        ErrorCode.NOT_ON_WAITLIST,
-        'You are not on the waitlist for this workshop.'
-      );
-    }
-
-    const removed = await waitlistRepo.remove(client, entry.rows[0].id);
-
-    await eventRepo.insertEvent(client, {
-      userId,
-      workshopId,
-      eventType:  'WAITLIST_LEFT',
-      prevStatus: 'WAITING',
-      newStatus:  'REMOVED',
-      reason:     'User voluntarily left waitlist.',
-    });
-
-    await client.query('COMMIT');
-    logger.info('Waitlist left', { userId, workshopId });
-    return formatEntry(removed);
-
-  } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-// ── GET POSITION ─────────────────────────────────────────────────────────────
-
-export async function getWaitlistPosition({ userId, workshopId }) {
-  const workshop = await workshopRepo.findById(workshopId);
-  if (!workshop) {
-    throw AppError.notFound(ErrorCode.WORKSHOP_NOT_FOUND, 'Workshop not found.');
-  }
-
-  const rank  = await waitlistRepo.getEffectiveRank(userId, workshopId);
-  const total = await waitlistRepo.countWaiting(workshopId);
-
-  if (rank === null) {
-    throw AppError.notFound(
-      ErrorCode.NOT_ON_WAITLIST,
-      'You are not on the waitlist for this workshop.'
-    );
-  }
-
-  return { position: rank, totalWaiting: total, workshopId };
-}
+const HOLD_DURATION_SECONDS = parseInt(process.env.HOLD_DURATION_SECONDS || '300', 10);
 
 /**
- * Promote the next WAITING user into a HELD reservation if capacity allows.
+ * Promote eligible waiters into active holds while caller holds the workshop lock.
  *
  * @param {string} workshopId
- * @returns {Promise<boolean>} True if user was promoted, false otherwise.
+ * @param {import('pg').PoolClient} client
+ * @returns {Promise<number>} Number of promoted waiters
  */
+export async function promoteEligibleWaiters(workshopId, client) {
+  let promoted = 0;
+
+  const ws = await client.query(
+    'SELECT capacity FROM workshops WHERE id = $1',
+    [workshopId],
+  );
+  if (!ws.rows[0]) return 0;
+  const maxIterations = ws.rows[0].capacity;
+
+  for (let i = 0; i < maxIterations; i++) {
+    const counts = await client.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'HELD' AND expires_at > NOW())::INT AS held,
+        COUNT(*) FILTER (WHERE status = 'CONFIRMED')::INT AS confirmed
+      FROM reservations
+      WHERE workshop_id = $1
+    `, [workshopId]);
+    const { held, confirmed } = counts.rows[0];
+    if (held + confirmed >= ws.rows[0].capacity) break;
+
+    const nextEntry = await client.query(`
+      SELECT id, user_id
+      FROM   waitlist_entries
+      WHERE  workshop_id = $1 AND status = 'WAITING'
+      ORDER  BY position ASC
+      LIMIT  1
+      FOR UPDATE SKIP LOCKED
+    `, [workshopId]);
+
+    if (!nextEntry.rows[0]) break;
+
+    const { id: entryId, user_id: candidateId } = nextEntry.rows[0];
+
+    const hasActive = await client.query(`
+      SELECT 1 FROM reservations
+      WHERE  workshop_id = $1 AND user_id = $2
+        AND  status IN ('HELD', 'CONFIRMED')
+        AND  (status = 'CONFIRMED' OR expires_at > NOW())
+    `, [workshopId, candidateId]);
+
+    if (hasActive.rows.length > 0) {
+      await client.query(`
+        UPDATE waitlist_entries SET status = 'REMOVED', updated_at = NOW()
+        WHERE  id = $1
+      `, [entryId]);
+      await client.query(`
+        INSERT INTO reservation_events
+          (user_id, workshop_id, event_type, new_status, metadata)
+        VALUES ($1, $2, 'WAITLIST_ENTRY_INVALIDATED', 'REMOVED', $3)
+      `, [candidateId, workshopId,
+          JSON.stringify({ reason: 'user_already_has_reservation', entryId })]);
+      logger.debug('Skipped ineligible waitlist entry', { entryId, candidateId, workshopId });
+      continue;
+    }
+
+    await client.query(`
+      UPDATE waitlist_entries SET status = 'PROMOTED', updated_at = NOW()
+      WHERE  id = $1
+    `, [entryId]);
+
+    const expiresAt = new Date(Date.now() + HOLD_DURATION_SECONDS * 1000);
+    const newRes = await client.query(`
+      INSERT INTO reservations (user_id, workshop_id, status, expires_at)
+      VALUES ($1, $2, 'HELD', $3)
+      RETURNING *
+    `, [candidateId, workshopId, expiresAt]);
+
+    await client.query(`
+      INSERT INTO reservation_events
+        (reservation_id, user_id, workshop_id, event_type, new_status, metadata)
+      VALUES ($1, $2, $3, 'PROMOTED_FROM_WAITLIST', 'HELD', $4)
+    `, [newRes.rows[0].id, candidateId, workshopId,
+        JSON.stringify({ promotedFromEntryId: entryId, expiresAt })]);
+
+    logger.info('Waitlist promotion', {
+      workshopId,
+      promotedUserId: candidateId,
+      reservationId:  newRes.rows[0].id,
+      totalPromoted:  promoted + 1,
+    });
+    promoted++;
+  }
+
+  return promoted;
+}
+
 export async function promoteNext(workshopId) {
   const client = await getClient();
   try {
     await client.query('BEGIN');
-
-    // Lock workshop to serialize against concurrent holds and other promotions
-    const workshop = await client.query(
-      `SELECT id, capacity FROM workshops WHERE id = $1 FOR UPDATE`,
-      [workshopId]
-    );
-    if (!workshop.rows[0]) {
-      await client.query('ROLLBACK');
-      return false;
-    }
-
-    // Verify a seat is actually available (another direct hold may have taken it)
-    const countRes = await client.query(`
-      SELECT COUNT(*)::INT AS count FROM reservations
-      WHERE workshop_id = $1
-        AND (status = 'CONFIRMED' OR (status = 'HELD' AND expires_at > NOW()))
-    `, [workshopId]);
-
-    if (countRes.rows[0].count >= workshop.rows[0].capacity) {
-      await client.query('ROLLBACK');
-      return false;
-    }
-
-    // Lock next WAITING entry — SKIP LOCKED handles concurrent promoters
-    const next = await waitlistRepo.lockNextWaiter(client, workshopId);
-    if (!next) {
-      await client.query('ROLLBACK');
-      return false;
-    }
-
-    await waitlistRepo.markPromoted(client, next.id);
-
-    // Create a HELD reservation for the promoted user
-    const holdSecs = HOLD_DURATION_SECONDS();
-    const newRes = await client.query(`
-      INSERT INTO reservations (user_id, workshop_id, status, expires_at)
-      VALUES ($1, $2, 'HELD', NOW() + ($3 || ' seconds')::INTERVAL)
-      RETURNING *
-    `, [next.user_id, workshopId, holdSecs]);
-
-    await eventRepo.insertEvent(client, {
-      reservationId: newRes.rows[0].id,
-      userId:        next.user_id,
-      workshopId,
-      eventType:     'WAITLIST_PROMOTED',
-      prevStatus:    'WAITING',
-      newStatus:     'HELD',
-      reason:        'Promoted from waitlist after a seat was freed.',
-      metadata:      { waitlistEntryId: next.id },
-    });
-
+    await client.query('SELECT id FROM workshops WHERE id = $1 FOR UPDATE', [workshopId]);
+    const promoted = await promoteEligibleWaiters(workshopId, client);
     await client.query('COMMIT');
-    logger.info('Waitlist promotion successful', {
-      userId: next.user_id, workshopId, reservationId: newRes.rows[0].id,
-    });
-    return true;
-
+    return promoted > 0;
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_) {}
-    if (err.code === '23505') {
-      // Promoted user already has an active reservation — skip them gracefully
-      logger.warn('Promotion skipped: user already has active reservation', { workshopId });
-      return false;
-    }
-    logger.error('promoteNext failed', { workshopId, message: err.message });
-    return false;
+    throw err;
   } finally {
     client.release();
   }
 }
 
-// ── Helper ────────────────────────────────────────────────────────────────────
+export async function joinWaitlist({ userId, workshopId, idempotencyKey, requestBody }) {
+  const result = await executeWithIdempotency({
+    idempotencyKey,
+    userId,
+    requestPath:    `/workshops/${workshopId}/waitlist/join`,
+    requestBody:    requestBody ?? {},
+    responseStatus: 201,
+    work: async (client) => {
+      const ws = await client.query(
+        'SELECT id, capacity FROM workshops WHERE id = $1 FOR UPDATE',
+        [workshopId],
+      );
+      if (!ws.rows[0]) {
+        throw AppError.notFound(ErrorCode.WORKSHOP_NOT_FOUND, 'Workshop not found.');
+      }
 
-function formatEntry(e) {
+      const hasReservation = await client.query(`
+        SELECT 1 FROM reservations
+        WHERE  workshop_id = $1 AND user_id = $2
+          AND  status IN ('HELD', 'CONFIRMED')
+          AND  (status = 'CONFIRMED' OR expires_at > NOW())
+      `, [workshopId, userId]);
+      if (hasReservation.rows.length > 0) {
+        throw AppError.conflict(
+          ErrorCode.ALREADY_HAS_RESERVATION,
+          'You already have an active reservation. Cancel it before joining the waitlist.',
+        );
+      }
+
+      const counts = await client.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'HELD' AND expires_at > NOW())::INT AS held,
+          COUNT(*) FILTER (WHERE status = 'CONFIRMED')::INT AS confirmed
+        FROM reservations WHERE workshop_id = $1
+      `, [workshopId]);
+      const { held, confirmed } = counts.rows[0];
+      if (held + confirmed < ws.rows[0].capacity) {
+        throw AppError.conflict(
+          ErrorCode.SEATS_AVAILABLE_USE_HOLD,
+          'Seats are available. Use the hold endpoint instead of joining the waitlist.',
+        );
+      }
+
+      const alreadyWaiting = await client.query(`
+        SELECT 1 FROM waitlist_entries
+        WHERE workshop_id = $1 AND user_id = $2 AND status = 'WAITING'
+      `, [workshopId, userId]);
+      if (alreadyWaiting.rows.length > 0) {
+        throw AppError.conflict(
+          ErrorCode.ALREADY_ON_WAITLIST,
+          'You are already on the waitlist for this workshop.',
+        );
+      }
+
+      const posResult = await client.query(`
+        SELECT COALESCE(MAX(position), 0) + 1 AS next_pos
+        FROM   waitlist_entries
+        WHERE  workshop_id = $1 AND status = 'WAITING'
+      `, [workshopId]);
+      const position = posResult.rows[0].next_pos;
+
+      const entryResult = await client.query(`
+        INSERT INTO waitlist_entries (user_id, workshop_id, status, position)
+        VALUES ($1, $2, 'WAITING', $3)
+        RETURNING *
+      `, [userId, workshopId, position]);
+
+      await client.query(`
+        INSERT INTO reservation_events (user_id, workshop_id, event_type, new_status, metadata)
+        VALUES ($1, $2, 'WAITLIST_JOINED', 'WAITING', $3)
+      `, [userId, workshopId, JSON.stringify({ position })]);
+
+      const entry = entryResult.rows[0];
+      return {
+        message: `You have joined the waitlist at position ${position}.`,
+        entry: {
+          id:         entry.id,
+          userId:     entry.user_id,
+          workshopId: entry.workshop_id,
+          status:     entry.status,
+          position:   entry.position,
+          createdAt:  entry.created_at,
+        },
+      };
+    },
+  });
+
+  return result;
+}
+
+export async function leaveWaitlist({ userId, workshopId, idempotencyKey, requestBody }) {
+  const result = await executeWithIdempotency({
+    idempotencyKey,
+    userId,
+    requestPath:    `/workshops/${workshopId}/waitlist/leave`,
+    requestBody:    requestBody ?? {},
+    responseStatus: 200,
+    work: async (client) => {
+      const entryResult = await client.query(`
+        UPDATE waitlist_entries
+        SET    status = 'REMOVED', updated_at = NOW()
+        WHERE  workshop_id = $1 AND user_id = $2 AND status = 'WAITING'
+        RETURNING *
+      `, [workshopId, userId]);
+
+      if (!entryResult.rows[0]) {
+        throw AppError.notFound(
+          ErrorCode.NOT_ON_WAITLIST,
+          'You are not currently on the waitlist for this workshop.',
+        );
+      }
+
+      const entry = entryResult.rows[0];
+      await client.query(`
+        INSERT INTO reservation_events (user_id, workshop_id, event_type, new_status, metadata)
+        VALUES ($1, $2, 'WAITLIST_LEFT', 'REMOVED', $3)
+      `, [userId, workshopId, JSON.stringify({ entryId: entry.id })]);
+
+      return {
+        message: 'You have left the waitlist.',
+        entry: {
+          id:         entry.id,
+          userId:     entry.user_id,
+          workshopId: entry.workshop_id,
+          status:     entry.status,
+          updatedAt:  entry.updated_at,
+        },
+      };
+    },
+  });
+
+  return result;
+}
+
+export async function getWaitlistPosition({ userId, workshopId }) {
+  const result = await query(`
+    SELECT we.id, we.position, we.status,
+      (SELECT COUNT(*)::INT FROM waitlist_entries
+       WHERE workshop_id = $1 AND status = 'WAITING') AS total_waiting
+    FROM waitlist_entries we
+    WHERE we.workshop_id = $1 AND we.user_id = $2 AND we.status = 'WAITING'
+  `, [workshopId, userId]);
+
+  if (!result.rows[0]) {
+    throw AppError.notFound(
+      ErrorCode.NOT_ON_WAITLIST,
+      'You are not currently on the waitlist for this workshop.',
+    );
+  }
+
+  const row = result.rows[0];
   return {
-    id:         e.id,
-    userId:     e.user_id,
-    workshopId: e.workshop_id,
-    status:     e.status,
-    position:   e.position,
-    createdAt:  e.created_at,
-    updatedAt:  e.updated_at,
+    position:     row.position,
+    totalWaiting: row.total_waiting,
+    workshopId,
   };
 }

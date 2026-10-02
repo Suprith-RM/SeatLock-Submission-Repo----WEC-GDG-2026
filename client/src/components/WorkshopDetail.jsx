@@ -80,6 +80,25 @@ export default function WorkshopDetail({ workshopId, token, onBack }) {
         </span>
       </div>
 
+      <div className="seat-counts">
+        <div className="seat-count-row">
+          <span className="seat-label">Available</span>
+          <span className="seat-value available">{workshop.availableSeats}</span>
+        </div>
+        <div className="seat-count-row">
+          <span className="seat-label">Held (pending)</span>
+          <span className="seat-value held">{workshop.heldCount ?? 0}</span>
+        </div>
+        <div className="seat-count-row">
+          <span className="seat-label">Confirmed</span>
+          <span className="seat-value confirmed">{workshop.confirmedCount ?? 0}</span>
+        </div>
+        <div className="seat-count-row total">
+          <span className="seat-label">Total capacity</span>
+          <span className="seat-value">{workshop.capacity}</span>
+        </div>
+      </div>
+
       {actionError && (
         <div className="error-banner" style={{ marginBottom: '1rem' }}>
           {actionError}

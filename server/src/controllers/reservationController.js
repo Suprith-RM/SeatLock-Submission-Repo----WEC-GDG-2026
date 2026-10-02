@@ -14,7 +14,7 @@ export async function createHold(req, res, next) {
     });
 
     if (result.fromCache) {
-      return res.status(200).json(result.cachedBody);
+      return res.status(result.cachedStatus ?? 200).json(result.cachedBody);
     }
 
     res.status(201).json(result);
@@ -26,9 +26,12 @@ export async function createHold(req, res, next) {
 export async function confirmHold(req, res, next) {
   try {
     const result = await holdService.confirmHold({
-      reservationId: req.params.reservationId,
-      userId:        req.user.id,
+      reservationId:  req.params.reservationId,
+      userId:         req.user.id,
+      idempotencyKey: req.idempotencyKey,
+      requestBody:    req.body,
     });
+    if (result.fromCache) return res.status(result.cachedStatus).json(result.cachedBody);
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -38,9 +41,12 @@ export async function confirmHold(req, res, next) {
 export async function cancelReservation(req, res, next) {
   try {
     const result = await holdService.cancelReservation({
-      reservationId: req.params.reservationId,
-      userId:        req.user.id,
+      reservationId:  req.params.reservationId,
+      userId:         req.user.id,
+      idempotencyKey: req.idempotencyKey,
+      requestBody:    req.body,
     });
+    if (result.fromCache) return res.status(result.cachedStatus).json(result.cachedBody);
     res.status(200).json(result);
   } catch (err) {
     next(err);

@@ -34,14 +34,14 @@ export function getSubscriberCount(workshopId) {
 export async function fetchPublicWorkshopState(workshopId) {
   const result = await query(`
     SELECT
-      w.id,
-      w.name,
-      w.capacity,
+      w.id, w.name, w.capacity,
       COUNT(r.id) FILTER (
-        WHERE r.status IN ('HELD', 'CONFIRMED')
-          AND (r.status = 'CONFIRMED' OR r.expires_at > NOW())
-      )::INT AS active_count
-    FROM  workshops w
+        WHERE r.status = 'HELD' AND r.expires_at > NOW()
+      )::INT AS held_count,
+      COUNT(r.id) FILTER (
+        WHERE r.status = 'CONFIRMED'
+      )::INT AS confirmed_count
+    FROM workshops w
     LEFT JOIN reservations r ON r.workshop_id = w.id
     WHERE w.id = $1
     GROUP BY w.id
@@ -49,13 +49,17 @@ export async function fetchPublicWorkshopState(workshopId) {
 
   if (!result.rows[0]) return null;
 
-  const ws = result.rows[0];
-  const availableSeats = Math.max(0, ws.capacity - ws.active_count);
+  const w              = result.rows[0];
+  const heldCount      = w.held_count;
+  const confirmedCount = w.confirmed_count;
+  const availableSeats = Math.max(0, w.capacity - heldCount - confirmedCount);
 
   return {
-    id:             ws.id,
-    name:           ws.name,
-    capacity:       ws.capacity,
+    id:             w.id,
+    name:           w.name,
+    capacity:       w.capacity,
+    heldCount,
+    confirmedCount,
     availableSeats,
     isFull:         availableSeats === 0,
   };

@@ -31,16 +31,18 @@ async function createHold(tok, key = randomUUID()) {
     .send();
 }
 
-async function confirmHold(tok, reservationId) {
+async function confirmHold(tok, reservationId, key = randomUUID()) {
   return request(app)
     .post(`/api/reservations/${reservationId}/confirm`)
-    .set('Authorization', `Bearer ${tok}`);
+    .set('Authorization', `Bearer ${tok}`)
+    .set('Idempotency-Key', key);
 }
 
-async function cancelReservation(tok, reservationId) {
+async function cancelReservation(tok, reservationId, key = randomUUID()) {
   return request(app)
     .delete(`/api/reservations/${reservationId}`)
-    .set('Authorization', `Bearer ${tok}`);
+    .set('Authorization', `Bearer ${tok}`)
+    .set('Idempotency-Key', key);
 }
 
 async function cancelAllForUser(uid) {
@@ -405,10 +407,12 @@ describe('Race H — Cancel triggers exactly-once waitlist promotion', () => {
     // Now join waitlist
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${waiter1.token}`);
+      .set('Authorization', `Bearer ${waiter1.token}`)
+      .set('Idempotency-Key', randomUUID());
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${waiter2.token}`);
+      .set('Authorization', `Bearer ${waiter2.token}`)
+      .set('Idempotency-Key', randomUUID());
   }, 60_000);
 
   afterAll(async () => {
@@ -486,7 +490,8 @@ describe('Race I — Two simultaneous cancellations, 1 waitlist user', () => {
     // waiter joins waitlist (workshop full with 20)
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${waiter.token}`);
+      .set('Authorization', `Bearer ${waiter.token}`)
+      .set('Idempotency-Key', randomUUID());
   }, 60_000);
 
   afterAll(async () => {
@@ -557,7 +562,8 @@ describe('Race J — Simultaneous hold and waitlist join', () => {
       createHold(user.token),
       request(app)
         .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-        .set('Authorization', `Bearer ${user.token}`),
+        .set('Authorization', `Bearer ${user.token}`)
+        .set('Idempotency-Key', randomUUID()),
     ]);
 
     // Hold should fail (full workshop)
@@ -828,7 +834,8 @@ describe('Waitlist — FIFO ordering under concurrent joins', () => {
     for (const u of users) {
       const res = await request(app)
         .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-        .set('Authorization', `Bearer ${u.token}`);
+        .set('Authorization', `Bearer ${u.token}`)
+        .set('Idempotency-Key', randomUUID());
       results.push(res);
     }
 

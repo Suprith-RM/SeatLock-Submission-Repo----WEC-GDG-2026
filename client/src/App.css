@@ -184,3 +184,12 @@ p  { color: var(--text-light); }
   .timer       { font-size: 2rem; }
   .app-header  { padding: .75rem 1rem; }
 }
+
+/* ── Seat Counts Breakdown ───────────────────────────────────────────────── */
+.seat-counts { margin: 1rem 0; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; }
+.seat-count-row { display: flex; justify-content: space-between; padding: 0.5rem 1rem; border-bottom: 1px solid #f0f0f0; }
+.seat-count-row.total { background: #f8f8f8; font-weight: 600; }
+.seat-value.available { color: #2e7d32; font-weight: 600; }
+.seat-value.held      { color: #e65100; }
+.seat-value.confirmed { color: #1565c0; }
+

@@ -93,14 +93,17 @@ describe('POST /api/workshops/:id/waitlist — seats available', () => {
     // Workshop has 20 seats and is not full — direct hold is required
     const res = await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('SEATS_AVAILABLE_USE_HOLD');
   });
 
   it('returns 401 without auth', async () => {
-    const res = await request(app).post(`/api/workshops/${WORKSHOP_ID}/waitlist`);
+    const res = await request(app)
+      .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
+      .set('Idempotency-Key', randomUUID());
     expect(res.status).toBe(401);
   });
 });
@@ -114,7 +117,8 @@ describe('Waitlist — full workshop scenario', () => {
   it('joins waitlist when workshop is full', async () => {
     const res = await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(201);
     expect(res.body.entry.status).toBe('WAITING');
@@ -124,11 +128,13 @@ describe('Waitlist — full workshop scenario', () => {
   it('returns 409 ALREADY_ON_WAITLIST on duplicate join', async () => {
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const res = await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ALREADY_ON_WAITLIST');
@@ -137,10 +143,12 @@ describe('Waitlist — full workshop scenario', () => {
   it('two users get consecutive positions (FIFO)', async () => {
     const r1 = await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
     const r2 = await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token2}`);
+      .set('Authorization', `Bearer ${token2}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(201);
@@ -150,10 +158,12 @@ describe('Waitlist — full workshop scenario', () => {
   it('GET /waitlist/position returns correct rank', async () => {
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token2}`);
+      .set('Authorization', `Bearer ${token2}`)
+      .set('Idempotency-Key', randomUUID());
 
     const r1 = await request(app)
       .get(`/api/workshops/${WORKSHOP_ID}/waitlist/position`)
@@ -171,11 +181,13 @@ describe('Waitlist — full workshop scenario', () => {
   it('DELETE /waitlist removes the user', async () => {
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const leave = await request(app)
       .delete(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(leave.status).toBe(200);
     expect(leave.body.entry.status).toBe('REMOVED');
@@ -184,10 +196,12 @@ describe('Waitlist — full workshop scenario', () => {
   it('GET /waitlist/position returns 404 after leaving', async () => {
     await request(app)
       .post(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
     await request(app)
       .delete(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const pos = await request(app)
       .get(`/api/workshops/${WORKSHOP_ID}/waitlist/position`)
@@ -200,7 +214,8 @@ describe('Waitlist — full workshop scenario', () => {
   it('DELETE /waitlist returns 404 when not on waitlist', async () => {
     const res = await request(app)
       .delete(`/api/workshops/${WORKSHOP_ID}/waitlist`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_ON_WAITLIST');

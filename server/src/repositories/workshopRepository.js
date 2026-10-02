@@ -1,94 +1,75 @@
 /**
- * Repository for workshop persistence, availability calculations, and row locks.
+ * Workshop repository for persistence and seat availability queries.
  */
 import { query } from '../config/db.js';
 
-/**
- * Get all workshops with real-time seat availability.
- *
- * @returns {Promise<Array<object>>}
- */
+function formatWorkshop(row) {
+  const heldCount      = row.held_count      ?? 0;
+  const confirmedCount = row.confirmed_count ?? 0;
+  const availableSeats = Math.max(0, row.capacity - heldCount - confirmedCount);
+  return {
+    id:             row.id,
+    name:           row.name,
+    description:    row.description,
+    capacity:       row.capacity,
+    heldCount,
+    confirmedCount,
+    availableSeats,
+    isFull:         availableSeats === 0,
+    createdAt:      row.created_at,
+    updatedAt:      row.updated_at,
+  };
+}
+
+const COUNTS_SQL = `
+  COUNT(r.id) FILTER (
+    WHERE r.status = 'HELD' AND r.expires_at > NOW()
+  )::INT AS held_count,
+  COUNT(r.id) FILTER (
+    WHERE r.status = 'CONFIRMED'
+  )::INT AS confirmed_count
+`;
+
 export async function findAll() {
   const result = await query(`
     SELECT
-      w.id,
-      w.name,
-      w.description,
-      w.capacity,
-      w.created_at,
-      COUNT(r.id) FILTER (
-        WHERE r.status = 'CONFIRMED'
-           OR (r.status = 'HELD' AND r.expires_at > NOW())
-      )::INT AS active_count,
-      (
-        w.capacity - COUNT(r.id) FILTER (
-          WHERE r.status = 'CONFIRMED'
-             OR (r.status = 'HELD' AND r.expires_at > NOW())
-        )
-      )::INT AS available_seats
+      w.id, w.name, w.description, w.capacity, w.created_at,
+      ${COUNTS_SQL}
     FROM workshops w
     LEFT JOIN reservations r ON r.workshop_id = w.id
     GROUP BY w.id
     ORDER BY w.created_at ASC
   `);
-  return result.rows;
+  return result.rows.map(formatWorkshop);
 }
 
-/**
- * Get single workshop by ID with real-time availability.
- *
- * @param {string} id
- * @returns {Promise<object|null>}
- */
-export async function findById(id) {
+export async function findById(workshopId) {
   const result = await query(`
     SELECT
-      w.id,
-      w.name,
-      w.description,
-      w.capacity,
-      w.created_at,
-      COUNT(r.id) FILTER (
-        WHERE r.status = 'CONFIRMED'
-           OR (r.status = 'HELD' AND r.expires_at > NOW())
-      )::INT AS active_count,
-      (
-        w.capacity - COUNT(r.id) FILTER (
-          WHERE r.status = 'CONFIRMED'
-             OR (r.status = 'HELD' AND r.expires_at > NOW())
-        )
-      )::INT AS available_seats
+      w.id, w.name, w.description, w.capacity, w.created_at,
+      ${COUNTS_SQL}
     FROM workshops w
     LEFT JOIN reservations r ON r.workshop_id = w.id
     WHERE w.id = $1
     GROUP BY w.id
-  `, [id]);
-  return result.rows[0] ?? null;
+  `, [workshopId]);
+  return result.rows[0] ? formatWorkshop(result.rows[0]) : null;
 }
 
 /**
- * Acquire exclusive row lock on workshop within an active transaction.
- *
- * @param {import('pg').PoolClient} client
- * @param {string} id
- * @returns {Promise<{ id: string, capacity: number }|null>}
+ * Acquire exclusive row lock within an active transaction client.
  */
+export async function findByIdForUpdate(workshopId, client) {
+  const result = await client.query(`
+    SELECT id, name, capacity FROM workshops WHERE id = $1 FOR UPDATE
+  `, [workshopId]);
+  return result.rows[0] ?? null;
+}
+
 export async function lockForUpdate(client, id) {
-  const result = await client.query(
-    `SELECT id, capacity FROM workshops WHERE id = $1 FOR UPDATE`,
-    [id]
-  );
-  return result.rows[0] ?? null;
+  return findByIdForUpdate(id, client);
 }
 
-/**
- * Count active reservations for a workshop within a transaction.
- * Excludes logically expired holds.
- *
- * @param {import('pg').PoolClient} client
- * @param {string} workshopId
- * @returns {Promise<number>}
- */
 export async function countActive(client, workshopId) {
   const result = await client.query(`
     SELECT COUNT(*)::INT AS count
@@ -99,5 +80,5 @@ export async function countActive(client, workshopId) {
         OR (status = 'HELD' AND expires_at > NOW())
       )
   `, [workshopId]);
-  return result.rows[0].count;
+  return result.rows[0]?.count ?? 0;
 }

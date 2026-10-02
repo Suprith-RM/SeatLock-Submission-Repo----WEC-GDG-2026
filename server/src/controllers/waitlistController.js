@@ -2,24 +2,27 @@ import * as waitlistService from '../services/waitlistService.js';
 
 export async function joinWaitlist(req, res, next) {
   try {
-    const entry = await waitlistService.joinWaitlist({
-      userId:     req.user.id,
-      workshopId: req.params.workshopId,
+    const result = await waitlistService.joinWaitlist({
+      userId:         req.user.id,
+      workshopId:     req.params.workshopId,
+      idempotencyKey: req.idempotencyKey,
+      requestBody:    req.body,
     });
-    res.status(201).json({
-      message: `Joined waitlist at position ${entry.position}.`,
-      entry,
-    });
+    if (result.fromCache) return res.status(result.cachedStatus).json(result.cachedBody);
+    res.status(201).json(result);
   } catch (err) { next(err); }
 }
 
 export async function leaveWaitlist(req, res, next) {
   try {
-    const entry = await waitlistService.leaveWaitlist({
-      userId:     req.user.id,
-      workshopId: req.params.workshopId,
+    const result = await waitlistService.leaveWaitlist({
+      userId:         req.user.id,
+      workshopId:     req.params.workshopId,
+      idempotencyKey: req.idempotencyKey,
+      requestBody:    req.body,
     });
-    res.json({ message: 'You have left the waitlist.', entry });
+    if (result.fromCache) return res.status(result.cachedStatus).json(result.cachedBody);
+    res.status(200).json(result);
   } catch (err) { next(err); }
 }
 

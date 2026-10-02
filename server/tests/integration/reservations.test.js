@@ -162,7 +162,7 @@ describe('POST /api/workshops/:id/holds', () => {
     await cancelAll(userId);
 
     const second = await createHold(token, key); // Same key
-    expect(second.status).toBe(200);             // 200 = cached
+    expect([200, 201]).toContain(second.status); // cached response
     expect(second.body.reservation.id).toBe(firstId); // Same reservation ID as cached
   });
 });
@@ -180,7 +180,8 @@ describe('POST /api/reservations/:id/confirm', () => {
   it('confirms a HELD reservation → status becomes CONFIRMED', async () => {
     const res = await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe('CONFIRMED');
@@ -190,11 +191,13 @@ describe('POST /api/reservations/:id/confirm', () => {
   it('returns 409 ALREADY_CONFIRMED on double-confirm', async () => {
     await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const res = await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ALREADY_CONFIRMED');
@@ -209,7 +212,8 @@ describe('POST /api/reservations/:id/confirm', () => {
 
     const res = await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('HOLD_EXPIRED');
@@ -220,13 +224,16 @@ describe('POST /api/reservations/:id/confirm', () => {
 
     const res = await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${other.token}`);
+      .set('Authorization', `Bearer ${other.token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(403);
   });
 
   it('returns 401 without authentication', async () => {
-    const res = await request(app).post(`/api/reservations/${reservationId}/confirm`);
+    const res = await request(app)
+      .post(`/api/reservations/${reservationId}/confirm`)
+      .set('Idempotency-Key', randomUUID());
     expect(res.status).toBe(401);
   });
 });
@@ -244,7 +251,8 @@ describe('DELETE /api/reservations/:id', () => {
   it('cancels a HELD reservation → status becomes CANCELLED', async () => {
     const res = await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe('CANCELLED');
@@ -253,11 +261,13 @@ describe('DELETE /api/reservations/:id', () => {
   it('cancels a CONFIRMED reservation → status becomes CANCELLED', async () => {
     await request(app)
       .post(`/api/reservations/${reservationId}/confirm`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const res = await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe('CANCELLED');
@@ -266,11 +276,13 @@ describe('DELETE /api/reservations/:id', () => {
   it('returns 409 ALREADY_CANCELLED on double-cancel', async () => {
     await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const res = await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ALREADY_CANCELLED');
@@ -281,7 +293,8 @@ describe('DELETE /api/reservations/:id', () => {
 
     const res = await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${other.token}`);
+      .set('Authorization', `Bearer ${other.token}`)
+      .set('Idempotency-Key', randomUUID());
 
     expect(res.status).toBe(403);
   });
@@ -290,7 +303,8 @@ describe('DELETE /api/reservations/:id', () => {
     // Cancel the hold
     await request(app)
       .delete(`/api/reservations/${reservationId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     // Hold again — should succeed
     const second = await createHold(token);
@@ -365,7 +379,8 @@ describe('GET /api/workshops/:id/my-reservation', () => {
 
     await request(app)
       .delete(`/api/reservations/${id}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID());
 
     const res = await request(app)
       .get(`/api/workshops/${WORKSHOP_ID}/my-reservation`)
