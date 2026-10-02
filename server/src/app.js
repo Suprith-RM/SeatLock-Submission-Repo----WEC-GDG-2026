@@ -1,3 +1,18 @@
+/**
+ * Express application setup.
+ * Separate from server.js so tests can import app without binding a port.
+ *
+ * MIDDLEWARE ORDER (order matters):
+ * 1. helmet         → secure HTTP headers
+ * 2. cors           → allow React client (port 5173)
+ * 3. morgan         → request logging
+ * 4. express.json   → parse JSON body (10kb limit)
+ * 5. requestId      → unique ID per request for tracing
+ * 6. rate limits    → global + per-endpoint
+ * 7. routes
+ * 8. 404 handler
+ * 9. error handler  ← MUST be last
+ */
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
@@ -6,78 +21,75 @@ import morgan from 'morgan';
 import { rateLimit } from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 
-import authRoutes from './routes/auth.js';
-import { errorHandler } from './middleware/errorHandler.js';
+import authRoutes        from './routes/auth.js';
+import workshopRoutes    from './routes/workshops.js';
+import reservationRoutes from './routes/reservations.js';
+import { errorHandler }  from './middleware/errorHandler.js';
 
 const app = express();
 
-// Security and utility middleware
 app.use(helmet());
+
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
+  allowedHeaders: [
+    'Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id',
+  ],
 }));
+
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10kb' }));
 
-// Traceability
+// Unique request ID for tracing in logs
 app.use((req, res, next) => {
   req.id = randomUUID();
   res.setHeader('X-Request-Id', req.id);
   next();
 });
 
-// Rate limiting
+// Global rate limit: 100 requests / 15 minutes / IP
 const globalLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  max:      parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
+  max:      parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
   standardHeaders: true,
   legacyHeaders:   false,
-  message: {
-    error: {
-      code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many requests. Try again later.',
-    },
-  },
+  skip:            () => process.env.NODE_ENV === 'test',
+  message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Try later.' } },
 });
 app.use('/api/', globalLimiter);
 
+// Stricter limit for auth: 20 attempts / 15 minutes / IP
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
-  message: {
-    error: {
-      code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many authentication attempts. Please try again later.',
-    },
-  },
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many auth attempts.' } },
 });
 
-// Health check endpoint
+// ── Health check (no auth) ────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV,
-  });
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), env: process.env.NODE_ENV });
 });
 
-// Application routes
-app.use('/api/auth', authLimiter, authRoutes);
+// ── API Routes ────────────────────────────────────────────────────────────
+app.use('/api/auth',         authLimiter,  authRoutes);
+app.use('/api/workshops',                  workshopRoutes);
+app.use('/api/reservations',               reservationRoutes);
 
-// Catch-all 404 handler
+// Part 4 will add:
+// app.use('/api/waitlist', waitlistRoutes);
+// app.use('/api/events',   eventsRoutes);   ← SSE
+
+// ── 404 handler ───────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({
-    error: {
-      code: 'NOT_FOUND',
-      message: `Route ${req.method} ${req.path} not found.`,
-    },
+    error: { code: 'NOT_FOUND', message: `Route ${req.method} ${req.path} not found.` },
   });
 });
 
-// Centralized error handling
+// ── Global error handler — MUST be last ──────────────────────────────────
 app.use(errorHandler);
 
 export default app;
