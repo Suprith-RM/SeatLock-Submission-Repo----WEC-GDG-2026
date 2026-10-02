@@ -1,6 +1,5 @@
 /**
- * Business logic for workshop queries.
- * Read-only service — no writes, no transactions needed.
+ * Business logic for workshop queries and availability formatting.
  */
 import * as workshopRepo from '../repositories/workshopRepository.js';
 import { AppError, ErrorCode } from '../utils/errors.js';

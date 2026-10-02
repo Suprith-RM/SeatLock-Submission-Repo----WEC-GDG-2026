@@ -1,8 +1,5 @@
 /**
- * All reservation-related request handlers.
- *
- * IDENTITY SOURCE: req.user.id — always from the verified JWT, never from the body.
- * An attacker sending { "userId": "victim" } in the body is completely ignored.
+ * Reservation controller handling hold creation, confirmation, and cancellation.
  */
 import * as holdService from '../services/holdService.js';
 
@@ -10,17 +7,16 @@ export async function createHold(req, res, next) {
   try {
     const { workshopId } = req.params;
     const userId         = req.user.id;
-    const idempotencyKey = req.idempotencyKey; // Set by requireIdempotencyKey middleware
+    const idempotencyKey = req.idempotencyKey;
 
     const result = await holdService.createHold({
       userId,
       workshopId,
       idempotencyKey,
       requestPath: req.path,
-      requestBody: { workshopId }, // The "content" that the key is scoped to
+      requestBody: { workshopId },
     });
 
-    // 201 for new holds, 200 for cached (idempotent retry) responses
     res.status(result.cached ? 200 : 201).json({
       message: result.cached
         ? 'Returning cached response for this Idempotency-Key.'
@@ -66,6 +62,6 @@ export async function getMyReservation(req, res, next) {
       userId:     req.user.id,
       workshopId: req.params.workshopId,
     });
-    res.json({ reservation }); // null if no active reservation — that's fine
+    res.json({ reservation });
   } catch (err) { next(err); }
 }

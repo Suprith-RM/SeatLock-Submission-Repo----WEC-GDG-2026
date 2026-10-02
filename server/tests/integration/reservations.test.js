@@ -1,7 +1,5 @@
 /**
  * Integration tests for the Reservation Engine.
- * Tests hit a REAL PostgreSQL database (seatlock_test).
- * Tests the full stack: HTTP → middleware → service → repository → DB → response.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';

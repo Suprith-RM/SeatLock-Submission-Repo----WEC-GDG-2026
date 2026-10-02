@@ -1,15 +1,5 @@
 /**
  * HTTP server entry point.
- *
- * STARTUP SEQUENCE:
- * 1. Verify database connectivity
- * 2. Start HTTP server (bind port)
- * 3. Start expiry job (immediate sweep + interval)
- * 4. Register graceful shutdown handlers
- *
- * IMPORTANT: The expiry job's startup sweep runs AFTER the server starts listening.
- * This is intentional: we want the server to be available immediately.
- * The sweep catches expired holds quickly (< 1 second after startup).
  */
 import 'dotenv/config';
 import http from 'http';
@@ -85,8 +75,6 @@ async function start() {
       });
     });
 
-    // Start expiry job AFTER the server binds
-    // (startup sweep catches holds expired during downtime)
     startExpiryJob();
 
     setupShutdown(server);

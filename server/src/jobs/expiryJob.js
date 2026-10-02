@@ -1,35 +1,20 @@
 /**
- * Background hold expiration job.
- *
- * Runs sweepExpiredHolds() every 60 seconds to:
- * 1. Set status='EXPIRED' for HELD rows where expires_at < NOW()
- * 2. Promote the next waitlist person into the freed seat
- *
- * STARTUP RECOVERY:
- * On server start, startExpiryJob() immediately runs the sweep BEFORE scheduling
- * the interval. This catches holds that expired during downtime (crash, deploy, restart).
- * No in-memory hold timers are lost — everything is stored in PostgreSQL with timestamps.
- *
- * CRASH SAFETY:
- * If the sweep throws, we log the error but DO NOT crash the process.
- * The next scheduled sweep will retry. This is acceptable because Tier 1 (logical expiry
- * at confirm-time) already prevents confirming expired holds. The sweep is cleanup.
+ * Background worker to sweep expired holds and auto-promote waitlist entries.
  */
 import { sweepExpiredHolds } from '../services/expirationService.js';
 import { logger }            from '../utils/logger.js';
 
-const SWEEP_INTERVAL_MS = 60_000; // 60 seconds
+const SWEEP_INTERVAL_MS = 60_000;
 let jobInterval = null;
 
 export function startExpiryJob() {
-  // Immediate sweep on startup (recovery from downtime)
+  // Run immediate recovery sweep on startup
   runSweep('startup');
 
-  // Recurring sweep
+  // Recurring sweep interval
   jobInterval = setInterval(() => runSweep('scheduled'), SWEEP_INTERVAL_MS);
 
-  // .unref() allows Node.js to exit if this is the only thing left running
-  // (important for graceful shutdown — the interval doesn't block process.exit)
+  // Allow graceful shutdown without being blocked by active interval timer
   if (jobInterval.unref) jobInterval.unref();
 
   logger.info('Hold expiry job started', { intervalMs: SWEEP_INTERVAL_MS });
@@ -50,7 +35,6 @@ async function runSweep(trigger) {
       logger.info('Expiry sweep complete', { trigger, ...result });
     }
   } catch (err) {
-    // Log error but DO NOT rethrow — keeps the server running
     logger.error('Expiry sweep failed', { trigger, message: err.message });
   }
 }

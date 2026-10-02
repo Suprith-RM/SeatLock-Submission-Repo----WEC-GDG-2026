@@ -1,15 +1,5 @@
 /**
- * Idempotency-Key middleware.
- *
- * This middleware ONLY validates and extracts the Idempotency-Key header.
- * It does NOT check the database — that happens inside the service (in the
- * same transaction as the business operation, guaranteeing atomicity).
- *
- * USAGE:
- *   router.post('/:id/holds', authenticate, requireIdempotencyKey, controller.createHold);
- *
- * After this middleware, req.idempotencyKey contains the validated key string.
- * The controller passes it to the service.
+ * Middleware that extracts and validates the Idempotency-Key header.
  */
 import { AppError, ErrorCode } from '../utils/errors.js';
 

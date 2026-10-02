@@ -1,11 +1,8 @@
 /**
- * Insert into the append-only reservation_events audit log.
+ * Inserts an entry into the append-only reservation_events audit log.
  *
- * RULE: This function MUST be called inside a transaction (same transaction
- * as the state change it records). If the state change rolls back, the event
- * also rolls back. The audit log is always consistent with the reservation state.
- *
- * NEVER UPDATE or DELETE rows from reservation_events.
+ * @param {import('pg').PoolClient} client
+ * @param {object} params
  */
 export async function insertEvent(client, {
   reservationId = null,

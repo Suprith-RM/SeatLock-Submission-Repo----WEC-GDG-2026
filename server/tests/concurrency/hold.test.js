@@ -1,18 +1,5 @@
 /**
- * Concurrency test: the core correctness proof for SELECT FOR UPDATE.
- *
- * Test: 25 different users simultaneously fire a hold request for the same workshop.
- * The workshop has 20 seats. At most 20 should succeed. Zero overbooking allowed.
- *
- * Without SELECT FOR UPDATE: a naive implementation would allow all 25 inserts
- * because each would read activeCount=0 (nobody has committed yet), see seats
- * available, and insert. Result: 25 active reservations for a 20-seat workshop.
- *
- * With SELECT FOR UPDATE: the 25 transactions queue at the lock. They execute
- * one-at-a-time. By the time transactions 21-25 run, activeCount=20 and they
- * correctly receive NO_SEATS_AVAILABLE.
- *
- * This test PROVES that SELECT FOR UPDATE prevents overbooking.
+ * Concurrency test verifying overbooking prevention under simultaneous hold requests.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';

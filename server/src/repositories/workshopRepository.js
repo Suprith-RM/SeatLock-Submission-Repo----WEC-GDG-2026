@@ -1,24 +1,12 @@
 /**
- * All SQL for the workshops table.
- *
- * CRITICAL FUNCTION: lockForUpdate()
- * This is the serialization point for all concurrent reservation transactions.
- * When Transaction A calls lockForUpdate(workshopId), PostgreSQL acquires an
- * exclusive row-level lock on that specific workshop row.
- * If Transaction B calls lockForUpdate() for the SAME workshop while A holds the lock,
- * Transaction B BLOCKS until A commits or rolls back.
- * This means capacity checks and reservation inserts are effectively serialized,
- * making overbooking impossible.
- *
- * WHY NOT a table-level lock?
- * A row-level lock only blocks other transactions for THIS specific workshop.
- * Workshop A and Workshop B can have concurrent reservations without blocking each other.
+ * Repository for workshop persistence, availability calculations, and row locks.
  */
 import { query } from '../config/db.js';
 
 /**
  * Get all workshops with real-time seat availability.
- * Uses logical expiry: HELD rows where expires_at <= NOW() are NOT counted as active.
+ *
+ * @returns {Promise<Array<object>>}
  */
 export async function findAll() {
   const result = await query(`
@@ -47,7 +35,10 @@ export async function findAll() {
 }
 
 /**
- * Get one workshop with real-time availability. No lock — read-only.
+ * Get single workshop by ID with real-time availability.
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>}
  */
 export async function findById(id) {
   const result = await query(`
@@ -76,12 +67,11 @@ export async function findById(id) {
 }
 
 /**
- * Lock the workshop row for a transaction.
- * MUST be called inside an active transaction (BEGIN already issued).
- * MUST use a client obtained from getClient(), not the pool's query() helper.
+ * Acquire exclusive row lock on workshop within an active transaction.
  *
- * After this returns, no other transaction can modify this workshop's reservation
- * count until this transaction COMMITs or ROLLBACKs.
+ * @param {import('pg').PoolClient} client
+ * @param {string} id
+ * @returns {Promise<{ id: string, capacity: number }|null>}
  */
 export async function lockForUpdate(client, id) {
   const result = await client.query(
@@ -92,10 +82,12 @@ export async function lockForUpdate(client, id) {
 }
 
 /**
- * Count active reservations within a transaction, AFTER the workshop row is locked.
+ * Count active reservations for a workshop within a transaction.
+ * Excludes logically expired holds.
  *
- * Uses logical expiry: does NOT count HELD rows where expires_at <= NOW().
- * This ensures users with expired holds don't block new reservations.
+ * @param {import('pg').PoolClient} client
+ * @param {string} workshopId
+ * @returns {Promise<number>}
  */
 export async function countActive(client, workshopId) {
   const result = await client.query(`

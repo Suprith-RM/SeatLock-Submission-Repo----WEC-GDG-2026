@@ -1,15 +1,13 @@
 /**
- * All SQL for the reservations table.
- *
- * TRANSACTION AWARENESS:
- * Functions that accept a `client` parameter MUST be called inside
- * an explicit transaction (BEGIN already issued on that client).
- * Functions that only accept a pool `query` use the pool directly (no transaction needed).
+ * Repository for reservation persistence and state transitions.
  */
 import { query } from '../config/db.js';
 
 /**
- * Find reservation by ID — simple read, no lock.
+ * Find reservation by ID.
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>}
  */
 export async function findById(id) {
   const result = await query(`
@@ -20,8 +18,11 @@ export async function findById(id) {
 }
 
 /**
- * Get the active (HELD or CONFIRMED) reservation a user has for a workshop.
- * Returns null if no active reservation.
+ * Find active (HELD or CONFIRMED) reservation for a user in a workshop.
+ *
+ * @param {string} userId
+ * @param {string} workshopId
+ * @returns {Promise<object|null>}
  */
 export async function findActiveByUserAndWorkshop(userId, workshopId) {
   const result = await query(`
@@ -35,10 +36,12 @@ export async function findActiveByUserAndWorkshop(userId, workshopId) {
 }
 
 /**
- * Expire any of this user's logically-overdue holds for a workshop.
- * Called at the START of createHold to clean up before inserting,
- * so the partial unique index doesn't block a re-hold after expiry.
- * Must be called inside a transaction, after the workshop row is locked.
+ * Expire user's stale holds for a workshop before attempting a new hold.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {string} userId
+ * @param {string} workshopId
+ * @returns {Promise<Array<{ id: string }>>}
  */
 export async function expireStaleHolds(client, userId, workshopId) {
   const result = await client.query(`
@@ -50,13 +53,15 @@ export async function expireStaleHolds(client, userId, workshopId) {
       AND expires_at <= NOW()
     RETURNING id
   `, [userId, workshopId]);
-  return result.rows; // List of IDs that were expired
+  return result.rows;
 }
 
 /**
- * Insert a new HELD reservation.
- * MUST be called inside a transaction, after the workshop row is locked and
- * capacity has been verified. The hold expires after holdDurationSeconds.
+ * Insert a new HELD reservation within a locked workshop transaction.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {object} params
+ * @returns {Promise<object>}
  */
 export async function createHold(client, { userId, workshopId, holdDurationSeconds }) {
   const result = await client.query(`
@@ -68,14 +73,11 @@ export async function createHold(client, { userId, workshopId, holdDurationSecon
 }
 
 /**
- * Atomically confirm a HELD reservation.
- * The WHERE clause is the critical guard:
- *   - status = 'HELD'          → already confirmed/cancelled fails
- *   - expires_at > NOW()        → logically expired holds fail
- *   - user_id = $2             → ownership check (cannot confirm another user's hold)
+ * Atomically confirm a HELD reservation if unexpired and owned by user.
  *
- * Returns the updated row, or null if any condition failed.
- * Zero rows = one of the conditions failed. The service diagnoses which one.
+ * @param {import('pg').PoolClient} client
+ * @param {object} params
+ * @returns {Promise<object|null>}
  */
 export async function confirmHold(client, { reservationId, userId }) {
   const result = await client.query(`
@@ -91,8 +93,11 @@ export async function confirmHold(client, { reservationId, userId }) {
 }
 
 /**
- * Lock a reservation row for reading + modification within a transaction.
- * Used in cancel to get the current state before updating.
+ * Lock reservation row within a transaction.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {string} id
+ * @returns {Promise<object|null>}
  */
 export async function lockById(client, id) {
   const result = await client.query(
@@ -104,7 +109,9 @@ export async function lockById(client, id) {
 
 /**
  * Expire all overdue HELD reservations across all workshops.
- * Called by the sweep job. Returns the expired rows.
+ *
+ * @param {import('pg').PoolClient} client
+ * @returns {Promise<Array<object>>}
  */
 export async function expireAllOverdueHolds(client) {
   const result = await client.query(`
