@@ -31,7 +31,7 @@ atomic idempotency, and live seat-count updates via Server-Sent Events.
 | **Auth** | JWT (HS256) | Stateless; no session store needed |
 | **Validation** | Zod | Schema-first validation with typed output |
 | **Testing** | Vitest + Supertest | In-process integration tests against real PostgreSQL |
-| **Load testing** | k6 | Scriptable, repeatable concurrency scenarios |
+| **Load testing** | k6 | External HTTP load tests — concurrency, idempotency, smoke |
 
 ---
 
@@ -174,15 +174,32 @@ Dev login credentials (from seed):
 | `npm test` | Run all Vitest integration + concurrency tests |
 | `npm run test:watch` | Vitest in watch mode |
 
-### Load Testing (requires running server)
+### Load Testing with k6 (requires running server + k6 installed)
+
+**Install k6:** https://grafana.com/docs/k6/latest/set-up/install-k6/
 
 ```bash
-cd server
-npm run reset-workshop          # Create a fresh 20-seat workshop for load tests
-npm run load:smoke              # Quick health check (< 1 min)
-npm run load:concurrency        # 25 VUs, 20 seats — the key concurrency test
-npm run load:soak               # 10 VUs, 2 min — memory leak / pool exhaustion check
+# 1. Start the server
+cd server && npm run dev
+
+# 2. Pre-create 100 test users and save their JWT tokens
+node load-tests/setup.js
+
+# 3. Run the tests (from the seatlock/ root)
+k6 run load-tests/smoke.js          # Happy-path: register → hold → confirm → cancel
+k6 run load-tests/concurrency.js    # 100 VUs → 20 seats: verifies no overbooking
+k6 run load-tests/idempotency.js    # Same key retried 5x: verifies no duplicate holds
 ```
+
+#### What each test proves
+
+| Script | VUs | What it checks |
+|--------|-----|----------------|
+| `smoke.js` | 1 | Full happy path works end-to-end |
+| `concurrency.js` | 100 | ≤ 20 holds succeed, 0 server errors, no overbooking |
+| `idempotency.js` | 10 × 5 retries | Same key returns cached response, no duplicates |
+
+Results are saved to `load-tests/results/` as JSON.
 
 ---
 
