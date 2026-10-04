@@ -14,6 +14,7 @@ export default function App() {
   const [user,               setUser]               = useState(null);
   const [selectedWorkshopId, setSelectedWorkshopId] = useState(null);
   const [verifying,          setVerifying]          = useState(!!localStorage.getItem(TOKEN_KEY));
+  const [listKey,            setListKey]            = useState(0);
 
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY);
@@ -63,12 +64,13 @@ export default function App() {
           <WorkshopDetail
             workshopId={selectedWorkshopId}
             token={token}
-            onBack={() => setSelectedWorkshopId(null)}
+            onBack={() => { setSelectedWorkshopId(null); setListKey(k => k + 1); }}
           />
         ) : (
           <WorkshopList
             token={token}
             onSelect={setSelectedWorkshopId}
+            refreshKey={listKey}
           />
         )}
       </main>

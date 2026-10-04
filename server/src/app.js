@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 
 const globalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-  max:      parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+  max:      parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '200'),
   standardHeaders: true, legacyHeaders: false,
   skip:            () => process.env.NODE_ENV === 'test',
   message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests.' } },

@@ -9,7 +9,7 @@ function formatTime(seconds) {
   return `${m}:${s}`;
 }
 
-export default function ReservationStatus({ reservation, onConfirm, onCancel, loading }) {
+export default function ReservationStatus({ reservation, onConfirm, onCancel, onExpire, loading }) {
   const [secondsLeft, setSecondsLeft] = useState(
     reservation.secondsUntilExpiry ?? 0
   );
@@ -19,11 +19,19 @@ export default function ReservationStatus({ reservation, onConfirm, onCancel, lo
     setSecondsLeft(reservation.secondsUntilExpiry ?? 0);
 
     const interval = setInterval(() => {
-      setSecondsLeft(s => Math.max(0, s - 1));
+      setSecondsLeft(s => {
+        const next = Math.max(0, s - 1);
+        if (next === 0) {
+          clearInterval(interval);
+          // Give the server a moment to expire the hold, then notify parent
+          setTimeout(() => onExpire?.(), 1500);
+        }
+        return next;
+      });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [reservation.id, reservation.status, reservation.secondsUntilExpiry]);
+  }, [reservation.id, reservation.status, reservation.secondsUntilExpiry, onExpire]);
 
   const isHeld      = reservation.status === 'HELD';
   const isConfirmed = reservation.status === 'CONFIRMED';
@@ -35,7 +43,9 @@ export default function ReservationStatus({ reservation, onConfirm, onCancel, lo
         <div className="panel-icon">⏰</div>
         <h3>Hold Expired</h3>
         <p>Your hold timed out and the seat has been released.</p>
-        <p className="text-muted">Refresh the page to see current availability.</p>
+        <div className="panel-actions">
+          <button className="btn btn-primary" onClick={() => onExpire?.()}>↻ Check Availability</button>
+        </div>
       </div>
     );
   }
