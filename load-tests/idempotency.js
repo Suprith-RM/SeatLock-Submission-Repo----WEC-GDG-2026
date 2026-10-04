@@ -42,10 +42,25 @@ export const options = {
   },
 };
 
+// 10 valid UUID v4s — one per VU.
+// Because they are constant per VU, every retry iteration of that VU sends the SAME valid UUID.
+const VU_KEYS = [
+  'e24b54e7-91a3-481b-85d0-9ce89622d101',
+  'e24b54e7-91a3-481b-85d0-9ce89622d102',
+  'e24b54e7-91a3-481b-85d0-9ce89622d103',
+  'e24b54e7-91a3-481b-85d0-9ce89622d104',
+  'e24b54e7-91a3-481b-85d0-9ce89622d105',
+  'e24b54e7-91a3-481b-85d0-9ce89622d106',
+  'e24b54e7-91a3-481b-85d0-9ce89622d107',
+  'e24b54e7-91a3-481b-85d0-9ce89622d108',
+  'e24b54e7-91a3-481b-85d0-9ce89622d109',
+  'e24b54e7-91a3-481b-85d0-9ce89622d110',
+];
+
 export default function () {
-  const token   = tokens[__VU % tokens.length];
+  const token   = tokens[(__VU - 1) % tokens.length];
   // Same key for ALL iterations of the same VU — this is the point
-  const idemKey = `idem-test-vu-${__VU}`;
+  const idemKey = VU_KEYS[(__VU - 1) % VU_KEYS.length];
 
   const res = http.post(
     `${BASE_URL}/api/workshops/${WORKSHOP_ID}/holds`,

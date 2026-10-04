@@ -24,6 +24,7 @@ import http   from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
+import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const BASE_URL     = __ENV.BASE_URL     || 'http://localhost:3001';
@@ -59,7 +60,7 @@ export const options = {
     // Hard pass/fail gates that reviewers will see in the summary
     'holds_created':   ['count <= 20'],  // MUST never exceed capacity
     'server_errors':   ['count == 0'],   // MUST have zero 500 errors
-    'http_req_failed': ['rate < 0.01'],  // Network failures < 1%
+    'checks':          ['rate == 1.0'],  // All responses (201 or 409) must match assertions
 
     // Informational — won't fail the run but shows in output
     'http_req_duration': ['p(95) < 2000'],
@@ -68,8 +69,8 @@ export const options = {
 
 // ── Main VU function ─────────────────────────────────────────────────────────
 export default function () {
-  const token = tokens[__VU % tokens.length];
-  const idemKey = `hold-${__VU}-${__ITER}`;  // unique per VU + iteration
+  const token = tokens[(__VU - 1) % tokens.length];
+  const idemKey = uuidv4();
 
   const res = http.post(
     `${BASE_URL}/api/workshops/${WORKSHOP_ID}/holds`,

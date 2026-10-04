@@ -16,10 +16,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "load:setup": "node --input-type=module < load-tests/setup.js",
-    "load:smoke": "k6 run load-tests/smoke.js",
-    "load:concurrency": "k6 run load-tests/concurrency.js",
-    "load:idempotency": "k6 run load-tests/idempotency.js"
+    "load:setup": "node ../load-tests/setup.js",
+    "load:smoke": "k6 run ../load-tests/smoke.js",
+    "load:concurrency": "k6 run ../load-tests/concurrency.js",
+    "load:idempotency": "k6 run ../load-tests/idempotency.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

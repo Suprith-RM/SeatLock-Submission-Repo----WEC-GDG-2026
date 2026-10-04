@@ -30,17 +30,22 @@ app.use((req, res, next) => {
   next();
 });
 
+const skipRateLimit = () =>
+  process.env.NODE_ENV === 'test' ||
+  process.env.DISABLE_RATE_LIMIT === 'true';
+
 const globalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
   max:      parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '200'),
   standardHeaders: true, legacyHeaders: false,
-  skip:            () => process.env.NODE_ENV === 'test',
+  skip:            skipRateLimit,
   message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests.' } },
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 20,
-  skip: () => process.env.NODE_ENV === 'test',
+  windowMs: 15 * 60 * 1000,
+  max:      parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20'),
+  skip:     skipRateLimit,
   message: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many auth attempts.' } },
 });
 

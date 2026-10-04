@@ -18,15 +18,24 @@ export async function getWorkshop(id) {
 }
 
 function format(w) {
-  const available = parseInt(w.available_seats ?? w.capacity, 10);
+  const heldCount      = parseInt(w.heldCount ?? w.held_count ?? 0, 10);
+  const confirmedCount = parseInt(w.confirmedCount ?? w.confirmed_count ?? 0, 10);
+  const capacity       = parseInt(w.capacity, 10);
+  const availableSeats = w.availableSeats !== undefined
+    ? parseInt(w.availableSeats, 10)
+    : Math.max(0, capacity - heldCount - confirmedCount);
+
   return {
     id:             w.id,
     name:           w.name,
     description:    w.description,
-    capacity:       parseInt(w.capacity, 10),
-    activeCount:    parseInt(w.active_count ?? 0, 10),
-    availableSeats: available,
-    isFull:         available <= 0,
-    createdAt:      w.created_at,
+    capacity,
+    heldCount,
+    confirmedCount,
+    activeCount:    heldCount + confirmedCount,
+    availableSeats,
+    isFull:         availableSeats <= 0,
+    createdAt:      w.createdAt ?? w.created_at,
+    updatedAt:      w.updatedAt ?? w.updated_at,
   };
 }
