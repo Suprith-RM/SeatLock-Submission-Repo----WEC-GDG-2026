@@ -1,3 +1,5 @@
+https://github.com/user-attachments/assets/28d05da8-35a4-4b3d-99fd-252f594bca3e
+
 # SeatLock
 
 A real-time seat reservation system for campus workshops. Built to handle
